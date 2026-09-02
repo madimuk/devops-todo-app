@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>DevOps Todo App</title>
+    <style>
+        body { font-family: sans-serif; max-width: 500px; margin: 40px auto; }
+        li { margin: 8px 0; }
+        .done { text-decoration: line-through; color: gray; }
+        form { display: flex; gap: 8px; margin-bottom: 20px; }
+        input[type=text] { flex: 1; padding: 6px; }
+    </style>
+</head>
+<body>
+    <h1>Todo List</h1>
+    <form action="/add" method="post">
+        <input type="text" name="title" placeholder="Новая задача" required>
+        <button type="submit">Добавить</button>
+    </form>
+    <ul>
+        {% for todo in todos %}
+        <li class="{{ 'done' if todo.done else '' }}">
+            <a href="/toggle/{{ todo.id }}">✓</a>
+            {{ todo.title }}
+            <a href="/delete/{{ todo.id }}">✗</a>
+        </li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
