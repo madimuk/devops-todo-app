@@ -1,4 +1,5 @@
 import os
+import time
 from flask import Flask, render_template, request, redirect, url_for
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -18,20 +19,30 @@ def get_db_connection():
     return psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
 
 
-def init_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS todos (
-            id SERIAL PRIMARY KEY,
-            title VARCHAR(255) NOT NULL,
-            done BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
+def init_db(retries=10, delay=2):
+    """Пытается подключиться к БД и создать таблицу.
+    Повторяет попытки, т.к. контейнер с Postgres может стартовать чуть дольше приложения."""
+    for attempt in range(1, retries + 1):
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS todos (
+                    id SERIAL PRIMARY KEY,
+                    title VARCHAR(255) NOT NULL,
+                    done BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            conn.commit()
+            cur.close()
+            conn.close()
+            print("База данных готова.")
+            return
+        except psycopg2.OperationalError as e:
+            print(f"Попытка {attempt}/{retries}: БД ещё не готова ({e}). Жду {delay} сек...")
+            time.sleep(delay)
+    raise RuntimeError("Не удалось подключиться к базе данных после нескольких попыток.")
 
 
 @app.route("/")
