@@ -26,9 +26,23 @@ spec:
               value: "postgres"  # Имя Service постгреса — Kubernetes DNS резолвит его сам
             - name: DB_PORT
               value: "5432"
-          envFrom:
-            - secretRef:
-                name: postgres-secret
+            # Приложение читает DB_*, а в Secret ключи POSTGRES_* —
+            # поэтому сопоставляем их явно через secretKeyRef
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
           readinessProbe:
             httpGet:
               path: /health
