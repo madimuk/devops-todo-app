@@ -19,7 +19,7 @@ flowchart LR
     subgraph AWS["AWS · eu-central-1 (provisioned by Terraform)"]
         direction TB
         subgraph VPC["VPC 10.0.0.0/16 · public subnet · IGW · Security Group"]
-            ec2[EC2 Ubuntu 24.04<br/>Docker Compose]
+            ec2[EC2 Ubuntu 24.04<br/>user_data: Docker + Compose]
             ec2 --- app[Flask app :5000]
             app --- db[(PostgreSQL 16)]
         end
@@ -37,12 +37,13 @@ flowchart LR
 |---|---|---|
 | Application | Python, Flask, PostgreSQL | Todo CRUD, configuration via environment variables, DB connection retry |
 | Containers | Docker, Docker Compose | Image based on `python:3.12-slim` with a cached dependency layer; DB healthcheck and `depends_on: service_healthy` |
-| IaC | Terraform | VPC, subnet, IGW, route table, Security Group, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
+| IaC | Terraform | VPC, subnet, IGW, route table, Security Group, SSH key pair, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
+| Deployment | EC2 `user_data` | On first boot the instance installs Docker, pulls the image from ghcr.io and starts the app with PostgreSQL — `terraform apply` gives a working app with no manual steps |
 | IaC test environment | LocalStack | Terraform debugged locally at zero AWS cost |
 | CI/CD | GitHub Actions | `flake8` → image build → push to ghcr.io from `main` only; pull requests are built but not published |
 | Registry | GitHub Container Registry | `latest` and short commit SHA tags, so any version can be rolled back to |
-| Monitoring | Prometheus, Grafana | Flask metrics via `prometheus-flask-exporter`, dashboard for requests and errors |
-| Orchestration | Kubernetes (minikube), NGINX Ingress | Deployment, Service and Ingress for the application |
+| Monitoring | Prometheus, Grafana | `/metrics` endpoint via `prometheus-flask-exporter`, Prometheus + Grafana in Docker Compose, dashboard for requests and errors |
+| Orchestration | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL with a PVC, app Deployment with 2 replicas and readiness/liveness probes on `/health`, Ingress |
 
 ## CI/CD pipeline
 
@@ -69,8 +70,9 @@ flowchart LR
 ├── docker-compose.yml          # app + PostgreSQL
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # AWS infrastructure (+ LocalStack guide)
-├── monitoring/                 # Prometheus + Grafana
-└── k8s/                        # Kubernetes manifests
+├── docker-compose.ghcr-test.yml # run the published image from ghcr.io locally
+├── monitoring/prometheus.yml   # Prometheus scrape config
+└── k8s/                        # Kubernetes manifests (namespace → secret → postgres → app → ingress)
 ```
 
 ## Quick start
@@ -81,7 +83,10 @@ flowchart LR
 git clone https://github.com/madimuk/devops-todo-app.git
 cd devops-todo-app
 docker compose up -d
-# app: http://localhost:5000
+# app:        http://localhost:5000
+# metrics:    http://localhost:5000/metrics
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000 (admin / admin)
 ```
 
 ### Prebuilt image from the registry
@@ -97,11 +102,24 @@ cd terraform
 terraform init
 terraform plan
 terraform apply
+# outputs: instance_public_ip and ssh_command
+# the app is available at http://<instance_public_ip>:5000 a few minutes after boot
 # always clean up after experiments:
 terraform destroy
 ```
 
-A detailed guide, including running against LocalStack, is in [terraform/README.md](terraform/README.md) (in Russian).
+### Kubernetes (minikube)
+
+```bash
+minikube start
+minikube addons enable ingress
+kubectl apply -f k8s/
+kubectl get pods -n devops-todo-app
+echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
+# app: http://todo-app.local
+```
+
+A detailed Terraform guide, including running against LocalStack, is in [terraform/README.md](terraform/README.md) (in Russian).
 
 ## Environment variables
 

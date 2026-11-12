@@ -19,7 +19,7 @@ flowchart LR
     subgraph AWS["AWS · eu-central-1 (создано Terraform)"]
         direction TB
         subgraph VPC["VPC 10.0.0.0/16 · public subnet · IGW · Security Group"]
-            ec2[EC2 Ubuntu 24.04<br/>Docker Compose]
+            ec2[EC2 Ubuntu 24.04<br/>user_data: Docker + Compose]
             ec2 --- app[Flask app :5000]
             app --- db[(PostgreSQL 16)]
         end
@@ -37,12 +37,13 @@ flowchart LR
 |---|---|---|
 | Приложение | Python, Flask, PostgreSQL | CRUD todo-списка, конфиг через переменные окружения, retry подключения к БД |
 | Контейнеры | Docker, Docker Compose | Образ на `python:3.12-slim` с кэшированием слоя зависимостей; healthcheck БД и `depends_on: service_healthy` |
-| IaC | Terraform | VPC, подсеть, IGW, route table, Security Group, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
+| IaC | Terraform | VPC, подсеть, IGW, route table, Security Group, SSH key pair, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
+| Деплой | EC2 `user_data` | При первом запуске инстанс ставит Docker, скачивает образ из ghcr.io и поднимает приложение с PostgreSQL — после `terraform apply` приложение работает без ручных шагов |
 | Тестовая среда IaC | LocalStack | Отладка Terraform локально, без затрат на AWS |
 | CI/CD | GitHub Actions | `flake8` → сборка образа → push в ghcr.io только из `main`; для PR — только сборка |
 | Registry | GitHub Container Registry | Теги `latest` и короткий SHA коммита — можно откатиться на любую версию |
-| Мониторинг | Prometheus, Grafana | Метрики Flask через `prometheus-flask-exporter`, дашборд запросов и ошибок |
-| Оркестрация | Kubernetes (minikube), NGINX Ingress | Deployment, Service, Ingress для приложения |
+| Мониторинг | Prometheus, Grafana | Эндпоинт `/metrics` через `prometheus-flask-exporter`, Prometheus + Grafana в Docker Compose, дашборд запросов и ошибок |
+| Оркестрация | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL с PVC, Deployment приложения на 2 реплики с readiness/liveness-пробами на `/health`, Ingress |
 
 ## CI/CD pipeline
 
@@ -69,8 +70,9 @@ flowchart LR
 ├── docker-compose.yml          # app + PostgreSQL
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # инфраструктура AWS (+ инструкция для LocalStack)
-├── monitoring/                 # Prometheus + Grafana
-└── k8s/                        # манифесты Kubernetes
+├── docker-compose.ghcr-test.yml # запуск опубликованного образа из ghcr.io локально
+├── monitoring/prometheus.yml   # конфиг сбора метрик Prometheus
+└── k8s/                        # манифесты Kubernetes (namespace → secret → postgres → app → ingress)
 ```
 
 ## Быстрый старт
@@ -82,6 +84,9 @@ git clone https://github.com/madimuk/devops-todo-app.git
 cd devops-todo-app
 docker compose up -d
 # приложение: http://localhost:5000
+# метрики:    http://localhost:5000/metrics
+# Prometheus: http://localhost:9090
+# Grafana:    http://localhost:3000 (admin / admin)
 ```
 
 ### Готовый образ из registry
@@ -97,11 +102,24 @@ cd terraform
 terraform init
 terraform plan
 terraform apply
+# outputs: instance_public_ip и ssh_command
+# приложение откроется на http://<instance_public_ip>:5000 через несколько минут после старта
 # после экспериментов — обязательно:
 terraform destroy
 ```
 
-Подробная инструкция, включая запуск на LocalStack, — в [terraform/README.md](terraform/README.md).
+### Kubernetes (minikube)
+
+```bash
+minikube start
+minikube addons enable ingress
+kubectl apply -f k8s/
+kubectl get pods -n devops-todo-app
+echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
+# приложение: http://todo-app.local
+```
+
+Подробная инструкция по Terraform, включая запуск на LocalStack, — в [terraform/README.md](terraform/README.md).
 
 ## Переменные окружения
 
