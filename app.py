@@ -3,8 +3,14 @@ import time
 from flask import Flask, render_template, request, redirect, url_for
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from prometheus_flask_exporter import PrometheusMetrics
 
 app = Flask(__name__)
+
+# Автоматически создаёт эндпоинт /metrics и собирает базовые метрики
+# (количество запросов, время ответа, коды статусов) для каждого маршрута
+metrics = PrometheusMetrics(app)
+metrics.info("app_info", "DevOps Todo App", version="1.0.0")
 
 DB_CONFIG = {
     "host": os.environ.get("DB_HOST", "localhost"),
@@ -99,4 +105,4 @@ def health():
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000)

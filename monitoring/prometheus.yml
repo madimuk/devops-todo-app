@@ -1,0 +1,17 @@
+# Как часто Prometheus опрашивает все источники метрик по умолчанию
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Список источников метрик ("targets"), которые нужно опрашивать
+scrape_configs:
+  # Метрики самого Prometheus — полезно для проверки, что он сам жив и здоров
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Метрики нашего Flask-приложения
+  - job_name: "todo-app"
+    static_configs:
+      # "app" — имя сервиса из docker-compose.yml, Docker сам резолвит его в IP
+      - targets: ["app:5000"]
