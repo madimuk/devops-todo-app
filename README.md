@@ -166,7 +166,7 @@ Real issues hit during the build and how they were fixed.
 - [x] CI/CD: GitHub Actions → ghcr.io
 - [x] Monitoring: Prometheus + Grafana (local)
 - [x] Kubernetes on minikube + NGINX Ingress
-- [ ] Terraform remote state: S3 + state locking
+- [x] Terraform remote state: S3 + state locking
 - [ ] OIDC for GitHub Actions → AWS instead of long-lived keys
 - [ ] Ansible: EC2 configuration and app deployment
 - [ ] Trivy: image scanning in the pipeline

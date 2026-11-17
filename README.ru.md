@@ -166,7 +166,7 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - [x] CI/CD: GitHub Actions → ghcr.io
 - [x] Мониторинг: Prometheus + Grafana (локально)
 - [x] Kubernetes на minikube + NGINX Ingress
-- [ ] Terraform remote state: S3 + блокировка
+- [x] Terraform remote state: S3 + блокировка
 - [ ] OIDC для GitHub Actions → AWS вместо постоянных ключей
 - [ ] Ansible: настройка EC2 и деплой приложения
 - [ ] Trivy: сканирование образа в pipeline
