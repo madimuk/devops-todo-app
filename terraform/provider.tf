@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.5.0"
+  required_version = ">= 1.10.0"
 
   required_providers {
     aws = {
@@ -7,11 +7,13 @@ terraform {
       version = "~> 5.0"
     }
   }
-}
 
-# Провайдер для настоящего AWS.
-# Access Key/Secret Key берутся автоматически из результата "aws configure",
-# поэтому здесь их указывать не нужно и не следует.
-provider "aws" {
-  region = "eu-central-1"
+  # Remote state: state хранится в S3, блокировка — lock-файлом в том же бакете
+  backend "s3" {
+    bucket       = "devops-todo-app-tfstate-965317436147"
+    key          = "devops-todo-app/terraform.tfstate"
+    region       = "eu-central-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
