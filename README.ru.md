@@ -37,7 +37,7 @@ flowchart LR
 |---|---|---|
 | Приложение | Python, Flask, PostgreSQL | CRUD todo-списка, конфиг через переменные окружения, retry подключения к БД |
 | Контейнеры | Docker, Docker Compose | Образ на `python:3.12-slim` с кэшированием слоя зависимостей; healthcheck БД и `depends_on: service_healthy` |
-| IaC | Terraform | VPC, подсеть, IGW, route table, Security Group, SSH key pair, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
+| IaC | Terraform | Remote state в S3 (версии, шифрование, нативная блокировка через `use_lockfile`); VPC, подсеть, IGW, route table, Security Group, SSH key pair, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
 | Деплой | EC2 `user_data` | При первом запуске инстанс ставит Docker, скачивает образ из ghcr.io и поднимает приложение с PostgreSQL — после `terraform apply` приложение работает без ручных шагов |
 | Тестовая среда IaC | LocalStack | Отладка Terraform локально, без затрат на AWS |
 | CI/CD | GitHub Actions | `flake8` → сборка образа → push в ghcr.io только из `main`; для PR — только сборка |
@@ -166,7 +166,7 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - [x] CI/CD: GitHub Actions → ghcr.io
 - [x] Мониторинг: Prometheus + Grafana (локально)
 - [x] Kubernetes на minikube + NGINX Ingress
-- [x] Terraform remote state: S3 + блокировка
+- [x] Terraform remote state: S3 + нативная блокировка (`use_lockfile`)
 - [ ] OIDC для GitHub Actions → AWS вместо постоянных ключей
 - [ ] Ansible: настройка EC2 и деплой приложения
 - [ ] Trivy: сканирование образа в pipeline

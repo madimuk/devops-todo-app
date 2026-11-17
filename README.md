@@ -37,7 +37,7 @@ flowchart LR
 |---|---|---|
 | Application | Python, Flask, PostgreSQL | Todo CRUD, configuration via environment variables, DB connection retry |
 | Containers | Docker, Docker Compose | Image based on `python:3.12-slim` with a cached dependency layer; DB healthcheck and `depends_on: service_healthy` |
-| IaC | Terraform | VPC, subnet, IGW, route table, Security Group, SSH key pair, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
+| IaC | Terraform | Remote state in S3 (versioning, encryption, native locking via `use_lockfile`); VPC, subnet, IGW, route table, Security Group, SSH key pair, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
 | Deployment | EC2 `user_data` | On first boot the instance installs Docker, pulls the image from ghcr.io and starts the app with PostgreSQL — `terraform apply` gives a working app with no manual steps |
 | IaC test environment | LocalStack | Terraform debugged locally at zero AWS cost |
 | CI/CD | GitHub Actions | `flake8` → image build → push to ghcr.io from `main` only; pull requests are built but not published |
@@ -166,7 +166,7 @@ Real issues hit during the build and how they were fixed.
 - [x] CI/CD: GitHub Actions → ghcr.io
 - [x] Monitoring: Prometheus + Grafana (local)
 - [x] Kubernetes on minikube + NGINX Ingress
-- [x] Terraform remote state: S3 + state locking
+- [x] Terraform remote state: S3 + native state locking (`use_lockfile`)
 - [ ] OIDC for GitHub Actions → AWS instead of long-lived keys
 - [ ] Ansible: EC2 configuration and app deployment
 - [ ] Trivy: image scanning in the pipeline
