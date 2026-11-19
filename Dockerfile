@@ -14,7 +14,6 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Теперь копируем весь остальной код
 # Копируем только то, что нужно приложению — а не всю папку проекта
 COPY app.py .
 COPY templates/ templates/
