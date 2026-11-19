@@ -6,3 +6,11 @@ __pycache__/
 venv/
 .vscode/
 README.md
+terraform/
+k8s/
+monitoring/
+.github/
+*.md
+docker-compose*.yml
+*.tfstate*
+.env*

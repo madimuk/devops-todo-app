@@ -4,13 +4,20 @@ FROM python:3.12-slim
 # Рабочая директория внутри контейнера
 WORKDIR /app
 
+# Ставим обновления безопасности ОС: базовый образ может отставать от патчей Debian
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # Сначала копируем только requirements.txt — это позволяет Docker кэшировать
 # слой с зависимостями, если сам код меняется, а зависимости нет
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Теперь копируем весь остальной код
-COPY . .
+# Копируем только то, что нужно приложению — а не всю папку проекта
+COPY app.py .
+COPY templates/ templates/
 
 # Порт, на котором работает Flask
 EXPOSE 5000
