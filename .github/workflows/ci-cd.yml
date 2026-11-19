@@ -38,11 +38,11 @@ jobs:
           flake8 app.py --max-line-length=120 --extend-ignore=E203
 
   # ---------------------------------------------------------------
-  # Job 2: сборка Docker-образа — проверяем, что Dockerfile рабочий.
-  # Публикация в registry происходит только для пушей в main (не для PR).
+  # Job 2: сборка → сканирование Trivy → публикация.
+  # Публикация в registry только для пушей в main и только если скан чистый.
   # ---------------------------------------------------------------
   docker-build-and-push:
-    name: Build and push Docker image
+    name: Build, scan and push Docker image
     runs-on: ubuntu-latest
     needs: lint  # запускается только если lint прошёл успешно
 
@@ -77,14 +77,40 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
-      - name: Build and push image
+      # 1) Собираем образ локально в раннер (load: true), НЕ публикуя его —
+      #    сначала его нужно просканировать
+      - name: Build image for scanning
         uses: docker/build-push-action@v5
         with:
           context: .
-          # push=true только при пуше в main, для pull request просто собираем и проверяем
-          push: ${{ github.event_name == 'push' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          push: false
+          tags: todo-app:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # 2) Сканируем образ Trivy. При HIGH/CRITICAL с готовым исправлением
+      #    шаг падает (exit-code 1) — и уязвимый образ не попадёт в registry.
+      #    Action подключён по SHA коммита, а не по тегу: в марте 2026 теги
+      #    trivy-action были перезаписаны вредоносным кодом (CVE-2026-33634).
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: todo-app:ci
+          version: v0.76.2
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      # 3) Публикуем в ghcr.io только просканированный образ и только при push в main.
+      #    Слои берутся из кэша шага 1, поэтому повторная сборка занимает секунды.
+      - name: Push image to registry
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
