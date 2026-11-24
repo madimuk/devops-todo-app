@@ -23,9 +23,9 @@ provider "aws" {
 }
 
 locals {
-  repo = "madimuk/devops-todo-app"
+  # Immutable sub prefix: gh api repos/madimuk/devops-todo-app/actions/oidc/customization/sub
+  sub_prefix = "repo:madimuk@156674890/devops-todo-app@1354639612"
 }
-
 # OIDC-провайдер GitHub (один на аккаунт)
 resource "aws_iam_openid_connect_provider" "github" {
   url            = "https://token.actions.githubusercontent.com"
@@ -46,8 +46,8 @@ resource "aws_iam_role" "github_plan" {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           "token.actions.githubusercontent.com:sub" = [
-            "repo:${local.repo}:ref:refs/heads/main",
-            "repo:${local.repo}:pull_request",
+            "${local.sub_prefix}:ref:refs/heads/main",
+            "${local.sub_prefix}:pull_request",
           ]
         }
       }
