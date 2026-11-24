@@ -40,7 +40,8 @@ flowchart LR
 | IaC | Terraform | Remote state in S3 (versioning, encryption, native locking via `use_lockfile`); VPC, subnet, IGW, route table, Security Group, SSH key pair, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
 | Deployment | EC2 `user_data` | On first boot the instance installs Docker, pulls the image from ghcr.io and starts the app with PostgreSQL — `terraform apply` gives a working app with no manual steps |
 | IaC test environment | LocalStack | Terraform debugged locally at zero AWS cost |
-| CI/CD | GitHub Actions | `flake8` → image build → push to ghcr.io from `main` only; pull requests are built but not published |
+| CI/CD | GitHub Actions | `flake8` → image build → Trivy scan → push to ghcr.io from `main` only; pull requests are built and scanned but not published |
+| Security | Trivy, Dependabot | Image scan blocks HIGH/CRITICAL vulnerabilities with an available fix; third-party actions pinned by commit SHA; weekly Dependabot PRs for actions, pip and the base image |
 | Registry | GitHub Container Registry | `latest` and short commit SHA tags, so any version can be rolled back to |
 | Monitoring | Prometheus, Grafana | `/metrics` endpoint via `prometheus-flask-exporter`, Prometheus + Grafana in Docker Compose, dashboard for requests and errors |
 | Orchestration | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL with a PVC, app Deployment with 2 replicas and readiness/liveness probes on `/health`, Ingress |
@@ -51,10 +52,12 @@ flowchart LR
 flowchart LR
     push[push / PR to main] --> lint[lint<br/>flake8]
     lint --> build[build<br/>Docker Buildx + GHA cache]
-    build -->|push to main only| publish[push to ghcr.io<br/>:latest, :sha-xxxxxxx]
+    build --> scan[Trivy scan<br/>HIGH/CRITICAL = fail]
+    scan -->|push to main only| publish[push to ghcr.io<br/>:latest, :sha-xxxxxxx]
 ```
 
 - `lint` and `build` run sequentially (`needs: lint`), so broken code never becomes an image.
+- The image is scanned by Trivy **before** it is pushed: a vulnerable image never reaches the registry.
 - For pull requests the image is built but not published: the Dockerfile is validated without cluttering the registry.
 - Authentication to ghcr.io uses the built-in `GITHUB_TOKEN` with least-privilege permissions (`packages: write`).
 - Docker layer cache is stored in the GitHub Actions cache to speed up rebuilds.
@@ -149,6 +152,13 @@ Real issues hit during the build and how they were fixed.
 - *Cause:* LocalStack does not emulate all public AMIs, so the image lookup behaved differently than on real AWS.
 - *Fix:* use LocalStack for syntax and logic, verify the AMI lookup against real AWS.
 
+**Trivy: 54 vulnerabilities in Go libraries in a Python image**
+- *Cause:* `COPY . .` copied the whole build context into the image, including the Terraform AWS provider binary from `terraform/.terraform/`.
+- *Fix:* explicit `COPY` of application files only, plus an extended `.dockerignore`.
+
+**Trivy: HIGH CVE in `zlib1g` from the base image**
+- *Fix:* `apt-get upgrade` in the Dockerfile, so OS security patches are applied even when the base image lags behind.
+
 **`.terraform/` accidentally committed to git**
 - *Fix:* `git rm -r --cached`, plus `.gitignore` rules (`**/.terraform/*`, `*.tfstate`).
 
@@ -169,6 +179,7 @@ Real issues hit during the build and how they were fixed.
 - [x] Terraform remote state: S3 + native state locking (`use_lockfile`)
 - [ ] OIDC for GitHub Actions → AWS instead of long-lived keys
 - [ ] Ansible: EC2 configuration and app deployment
-- [ ] Trivy: image scanning in the pipeline
+- [x] Trivy: image scanning in the pipeline
+- [x] Dependabot: weekly updates for actions, pip and Docker
 - [ ] SSH restricted to my IP, access via SSM Session Manager
 - [ ] Helm chart for the application

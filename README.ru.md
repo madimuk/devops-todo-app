@@ -40,7 +40,8 @@ flowchart LR
 | IaC | Terraform | Remote state в S3 (версии, шифрование, нативная блокировка через `use_lockfile`); VPC, подсеть, IGW, route table, Security Group, SSH key pair, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
 | Деплой | EC2 `user_data` | При первом запуске инстанс ставит Docker, скачивает образ из ghcr.io и поднимает приложение с PostgreSQL — после `terraform apply` приложение работает без ручных шагов |
 | Тестовая среда IaC | LocalStack | Отладка Terraform локально, без затрат на AWS |
-| CI/CD | GitHub Actions | `flake8` → сборка образа → push в ghcr.io только из `main`; для PR — только сборка |
+| CI/CD | GitHub Actions | `flake8` → сборка образа → сканирование Trivy → push в ghcr.io только из `main`; для PR — сборка и сканирование без публикации |
+| Безопасность | Trivy, Dependabot | Сканирование образа блокирует HIGH/CRITICAL уязвимости, для которых есть исправление; сторонние actions закреплены по SHA коммита; еженедельные PR от Dependabot для actions, pip и базового образа |
 | Registry | GitHub Container Registry | Теги `latest` и короткий SHA коммита — можно откатиться на любую версию |
 | Мониторинг | Prometheus, Grafana | Эндпоинт `/metrics` через `prometheus-flask-exporter`, Prometheus + Grafana в Docker Compose, дашборд запросов и ошибок |
 | Оркестрация | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL с PVC, Deployment приложения на 2 реплики с readiness/liveness-пробами на `/health`, Ingress |
@@ -51,10 +52,12 @@ flowchart LR
 flowchart LR
     push[push / PR в main] --> lint[lint<br/>flake8]
     lint --> build[build<br/>Docker Buildx + GHA cache]
-    build -->|только push в main| publish[push в ghcr.io<br/>:latest, :sha-xxxxxxx]
+    build --> scan[Trivy scan<br/>HIGH/CRITICAL = fail]
+    scan -->|только push в main| publish[push в ghcr.io<br/>:latest, :sha-xxxxxxx]
 ```
 
 - `lint` и `build` идут последовательно (`needs: lint`) — сломанный код не превращается в образ.
+- Образ сканируется Trivy **до** публикации: уязвимый образ не попадает в registry.
 - Для pull request образ собирается, но не публикуется: проверяем Dockerfile, не засоряя registry.
 - Авторизация в ghcr.io через встроенный `GITHUB_TOKEN` с минимальными правами (`packages: write`).
 - Кэш слоёв Docker хранится в GitHub Actions cache — повторные сборки быстрее.
@@ -149,6 +152,13 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - *Причина:* LocalStack эмулирует не все публичные AMI, поиск образа вёл себя иначе, чем в реальном AWS.
 - *Решение:* отлаживать синтаксис на LocalStack, а поиск AMI проверять на реальном AWS.
 
+**Trivy: 54 уязвимости в Go-библиотеках в Python-образе**
+- *Причина:* `COPY . .` копировал в образ весь контекст сборки, включая бинарник провайдера AWS из `terraform/.terraform/`.
+- *Решение:* явный `COPY` только файлов приложения и расширенный `.dockerignore`.
+
+**Trivy: HIGH CVE в `zlib1g` из базового образа**
+- *Решение:* `apt-get upgrade` в Dockerfile — патчи безопасности ОС ставятся, даже если базовый образ отстаёт.
+
 **Случайный коммит `.terraform/` в git**
 - *Решение:* `git rm -r --cached`, добавить правила в `.gitignore` (`**/.terraform/*`, `*.tfstate`).
 
@@ -169,6 +179,7 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - [x] Terraform remote state: S3 + нативная блокировка (`use_lockfile`)
 - [ ] OIDC для GitHub Actions → AWS вместо постоянных ключей
 - [ ] Ansible: настройка EC2 и деплой приложения
-- [ ] Trivy: сканирование образа в pipeline
+- [x] Trivy: сканирование образа в pipeline
+- [x] Dependabot: еженедельные обновления actions, pip и Docker
 - [ ] SSH только с моего IP, доступ через SSM Session Manager
 - [ ] Helm-чарт для приложения
