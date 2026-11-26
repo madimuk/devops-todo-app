@@ -28,8 +28,7 @@ EXPOSE 5000
 ENV DB_HOST=db \
     DB_PORT=5432 \
     DB_NAME=tododb \
-    DB_USER=postgres \
-    DB_PASSWORD=postgres
+    DB_USER=postgres
 
 # Команда запуска приложения
 CMD ["python", "app.py"]
