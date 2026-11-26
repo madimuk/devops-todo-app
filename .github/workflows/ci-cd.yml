@@ -77,6 +77,11 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
+      # Дата для сброса кэша apt-слоя раз в сутки
+      - name: Get build date
+        id: date
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       # 1) Собираем образ локально в раннер (load: true), НЕ публикуя его —
       #    сначала его нужно просканировать
       - name: Build image for scanning
@@ -88,6 +93,8 @@ jobs:
           tags: todo-app:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            APT_CACHE_BUST=${{ steps.date.outputs.day }}
 
       # 2) Сканируем образ Trivy. При HIGH/CRITICAL с готовым исправлением
       #    шаг падает (exit-code 1) — и уязвимый образ не попадёт в registry.
@@ -114,6 +121,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
+          build-args: |
+            APT_CACHE_BUST=${{ steps.date.outputs.day }}
 
   # ---------------------------------------------------------------
   # Job 3: terraform plan в AWS без постоянных ключей.
