@@ -42,6 +42,7 @@ flowchart LR
 | Тестовая среда IaC | LocalStack | Отладка Terraform локально, без затрат на AWS |
 | CI/CD | GitHub Actions | `flake8` → сборка образа → сканирование Trivy → push в ghcr.io только из `main`; для PR — сборка и сканирование без публикации |
 | Безопасность | Trivy, Dependabot | Сканирование образа блокирует HIGH/CRITICAL уязвимости, для которых есть исправление; сторонние actions закреплены по SHA коммита; еженедельные PR от Dependabot для actions, pip и базового образа |
+| Доступ в облако | GitHub OIDC → AWS STS | `terraform plan` выполняется в CI с временными кредами IAM-роли — никаких AWS-ключей в GitHub; trust policy привязана к этому репозиторию (`main` и pull request) через immutable `sub` claim |
 | Registry | GitHub Container Registry | Теги `latest` и короткий SHA коммита — можно откатиться на любую версию |
 | Мониторинг | Prometheus, Grafana | Эндпоинт `/metrics` через `prometheus-flask-exporter`, Prometheus + Grafana в Docker Compose, дашборд запросов и ошибок |
 | Оркестрация | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL с PVC, Deployment приложения на 2 реплики с readiness/liveness-пробами на `/health`, Ingress |
@@ -54,6 +55,7 @@ flowchart LR
     lint --> build[build<br/>Docker Buildx + GHA cache]
     build --> scan[Trivy scan<br/>HIGH/CRITICAL = fail]
     scan -->|только push в main| publish[push в ghcr.io<br/>:latest, :sha-xxxxxxx]
+    lint --> plan[terraform plan<br/>OIDC → AWS, read-only роль]
 ```
 
 - `lint` и `build` идут последовательно (`needs: lint`) — сломанный код не превращается в образ.
@@ -61,6 +63,19 @@ flowchart LR
 - Для pull request образ собирается, но не публикуется: проверяем Dockerfile, не засоряя registry.
 - Авторизация в ghcr.io через встроенный `GITHUB_TOKEN` с минимальными правами (`packages: write`).
 - Кэш слоёв Docker хранится в GitHub Actions cache — повторные сборки быстрее.
+
+### Доступ в AWS без ключей через OIDC
+
+Job `terraform-plan` получает доступ к AWS без хранимых секретов: GitHub выдаёт короткоживущий OIDC-токен (`id-token: write`), AWS STS меняет его на временные креды роли `github-actions-devops-todo-plan`.
+
+```
+"Arn": "arn:aws:sts::965317436147:assumed-role/github-actions-devops-todo-plan/GitHubActions"
+```
+
+- OIDC-провайдер и роль вынесены в отдельный Terraform-стек [`terraform/github-oidc/`](terraform/github-oidc/) со своим ключом state — `terraform destroy` окружения приложения не ломает доступ CI.
+- Trust policy проверяет `aud = sts.amazonaws.com` и `sub` только для `main` и pull request этого репозитория.
+- Роль только на чтение (`ReadOnlyAccess`) плюс запись только lock-файла state.
+- `aws-actions/configure-aws-credentials` и `hashicorp/setup-terraform` закреплены по SHA коммита.
 
 ## Структура репозитория
 
@@ -73,6 +88,7 @@ flowchart LR
 ├── docker-compose.yml          # app + PostgreSQL
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # инфраструктура AWS (+ инструкция для LocalStack)
+│   └── github-oidc/            # OIDC-провайдер + IAM-роль для GitHub Actions (отдельный state)
 ├── docker-compose.ghcr-test.yml # запуск опубликованного образа из ghcr.io локально
 ├── monitoring/prometheus.yml   # конфиг сбора метрик Prometheus
 └── k8s/                        # манифесты Kubernetes (namespace → secret → postgres → app → ingress)
@@ -162,6 +178,14 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 **Случайный коммит `.terraform/` в git**
 - *Решение:* `git rm -r --cached`, добавить правила в `.gitignore` (`**/.terraform/*`, `*.tfstate`).
 
+**OIDC: `Not authorized to perform sts:AssumeRoleWithWebIdentity`**
+- *Причина:* GitHub выдаёт immutable `sub` claim с ID владельца и репозитория (`repo:madimuk@156674890/devops-todo-app@1354639612:...`), а trust policy ждала именной формат `repo:madimuk/devops-todo-app:...`.
+- *Решение:* получить реальный префикс через `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` и использовать его в trust policy.
+
+**OIDC bootstrap: `AccessDenied` на `iam:CreateOpenIDConnectProvider`**
+- *Причина:* у IAM-пользователя Terraform намеренно нет прав на IAM.
+- *Решение:* временная inline-политика, ограниченная OIDC-провайдером и `role/github-actions-*`, удалена сразу после `apply` (право менять роли — путь к повышению привилегий).
+
 ## Контроль стоимости AWS
 
 - Инстанс `t2.micro`, без NAT Gateway и ALB.
@@ -177,7 +201,7 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - [x] Мониторинг: Prometheus + Grafana (локально)
 - [x] Kubernetes на minikube + NGINX Ingress
 - [x] Terraform remote state: S3 + нативная блокировка (`use_lockfile`)
-- [ ] OIDC для GitHub Actions → AWS вместо постоянных ключей
+- [x] OIDC для GitHub Actions → AWS вместо постоянных ключей
 - [ ] Ansible: настройка EC2 и деплой приложения
 - [x] Trivy: сканирование образа в pipeline
 - [x] Dependabot: еженедельные обновления actions, pip и Docker

@@ -42,6 +42,7 @@ flowchart LR
 | IaC test environment | LocalStack | Terraform debugged locally at zero AWS cost |
 | CI/CD | GitHub Actions | `flake8` → image build → Trivy scan → push to ghcr.io from `main` only; pull requests are built and scanned but not published |
 | Security | Trivy, Dependabot | Image scan blocks HIGH/CRITICAL vulnerabilities with an available fix; third-party actions pinned by commit SHA; weekly Dependabot PRs for actions, pip and the base image |
+| Cloud access | GitHub OIDC → AWS STS | `terraform plan` runs in CI with short-lived credentials from an IAM role — no AWS access keys stored in GitHub; trust policy pinned to this repo (`main` and pull requests) via the immutable `sub` claim |
 | Registry | GitHub Container Registry | `latest` and short commit SHA tags, so any version can be rolled back to |
 | Monitoring | Prometheus, Grafana | `/metrics` endpoint via `prometheus-flask-exporter`, Prometheus + Grafana in Docker Compose, dashboard for requests and errors |
 | Orchestration | Kubernetes (minikube), NGINX Ingress | Namespace, Secret, PostgreSQL with a PVC, app Deployment with 2 replicas and readiness/liveness probes on `/health`, Ingress |
@@ -54,6 +55,7 @@ flowchart LR
     lint --> build[build<br/>Docker Buildx + GHA cache]
     build --> scan[Trivy scan<br/>HIGH/CRITICAL = fail]
     scan -->|push to main only| publish[push to ghcr.io<br/>:latest, :sha-xxxxxxx]
+    lint --> plan[terraform plan<br/>OIDC → AWS, read-only role]
 ```
 
 - `lint` and `build` run sequentially (`needs: lint`), so broken code never becomes an image.
@@ -61,6 +63,19 @@ flowchart LR
 - For pull requests the image is built but not published: the Dockerfile is validated without cluttering the registry.
 - Authentication to ghcr.io uses the built-in `GITHUB_TOKEN` with least-privilege permissions (`packages: write`).
 - Docker layer cache is stored in the GitHub Actions cache to speed up rebuilds.
+
+### Keyless AWS access via OIDC
+
+The `terraform-plan` job gets AWS credentials without any stored secrets: GitHub issues a short-lived OIDC token (`id-token: write`), AWS STS exchanges it for temporary credentials of the `github-actions-devops-todo-plan` role.
+
+```
+"Arn": "arn:aws:sts::965317436147:assumed-role/github-actions-devops-todo-plan/GitHubActions"
+```
+
+- The OIDC provider and the role live in a separate Terraform stack, [`terraform/github-oidc/`](terraform/github-oidc/), with its own state key, so `terraform destroy` of the app environment never removes CI access.
+- Trust policy checks `aud = sts.amazonaws.com` and `sub` for `main` and pull requests of this repository only.
+- The role is read-only (`ReadOnlyAccess`) plus write access to the state lock file only.
+- `aws-actions/configure-aws-credentials` and `hashicorp/setup-terraform` are pinned by commit SHA.
 
 ## Repository layout
 
@@ -73,6 +88,7 @@ flowchart LR
 ├── docker-compose.yml          # app + PostgreSQL
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # AWS infrastructure (+ LocalStack guide)
+│   └── github-oidc/            # OIDC provider + IAM role for GitHub Actions (separate state)
 ├── docker-compose.ghcr-test.yml # run the published image from ghcr.io locally
 ├── monitoring/prometheus.yml   # Prometheus scrape config
 └── k8s/                        # Kubernetes manifests (namespace → secret → postgres → app → ingress)
@@ -162,6 +178,14 @@ Real issues hit during the build and how they were fixed.
 **`.terraform/` accidentally committed to git**
 - *Fix:* `git rm -r --cached`, plus `.gitignore` rules (`**/.terraform/*`, `*.tfstate`).
 
+**OIDC: `Not authorized to perform sts:AssumeRoleWithWebIdentity`**
+- *Cause:* GitHub now issues an immutable `sub` claim with owner and repo IDs (`repo:madimuk@156674890/devops-todo-app@1354639612:...`), while the trust policy expected the name-based `repo:madimuk/devops-todo-app:...`.
+- *Fix:* read the real prefix with `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` and use it in the trust policy.
+
+**OIDC bootstrap: `AccessDenied` on `iam:CreateOpenIDConnectProvider`**
+- *Cause:* the Terraform IAM user intentionally has no IAM permissions.
+- *Fix:* a temporary inline policy scoped to the OIDC provider and `role/github-actions-*`, removed right after `apply` (IAM write access on roles is a privilege escalation path).
+
 ## AWS cost control
 
 - `t2.micro` instance, no NAT Gateway or ALB.
@@ -177,7 +201,7 @@ Real issues hit during the build and how they were fixed.
 - [x] Monitoring: Prometheus + Grafana (local)
 - [x] Kubernetes on minikube + NGINX Ingress
 - [x] Terraform remote state: S3 + native state locking (`use_lockfile`)
-- [ ] OIDC for GitHub Actions → AWS instead of long-lived keys
+- [x] OIDC for GitHub Actions → AWS instead of long-lived keys
 - [ ] Ansible: EC2 configuration and app deployment
 - [x] Trivy: image scanning in the pipeline
 - [x] Dependabot: weekly updates for actions, pip and Docker
