@@ -19,13 +19,14 @@ flowchart LR
     subgraph AWS["AWS · eu-central-1 (создано Terraform)"]
         direction TB
         subgraph VPC["VPC 10.0.0.0/16 · public subnet · IGW · Security Group"]
-            ec2[EC2 Ubuntu 24.04<br/>user_data: Docker + Compose]
+            ec2[EC2 Ubuntu 24.04<br/>Docker + Compose]
             ec2 --- app[Flask app :5000]
             app --- db[(PostgreSQL 16)]
         end
     end
 
     reg -->|docker pull| ec2
+    ans[Ansible<br/>site.yml] -->|SSH| ec2
     prom[Prometheus] -->|scrape /metrics| app
     graf[Grafana] --> prom
     user[Пользователь] -->|HTTP :5000| app
@@ -38,7 +39,7 @@ flowchart LR
 | Приложение | Python, Flask, PostgreSQL | CRUD todo-списка, конфиг через переменные окружения, retry подключения к БД |
 | Контейнеры | Docker, Docker Compose | Образ на `python:3.12-slim` с кэшированием слоя зависимостей; healthcheck БД и `depends_on: service_healthy` |
 | IaC | Terraform | Remote state в S3 (версии, шифрование, нативная блокировка через `use_lockfile`); VPC, подсеть, IGW, route table, Security Group, SSH key pair, EC2; AMI Ubuntu ищется через `data` source, без хардкода ID |
-| Деплой | EC2 `user_data` | При первом запуске инстанс ставит Docker, скачивает образ из ghcr.io и поднимает приложение с PostgreSQL — после `terraform apply` приложение работает без ручных шагов |
+| Настройка сервера | Ansible | Terraform только создаёт инфраструктуру; сервер настраивается идемпотентным плейбуком (`ansible/site.yml`). Роль `docker`: Docker Engine + плагин Compose из официального репозитория, сервис включён, `ubuntu` в группе `docker`. Роль деплоя приложения — в работе |
 | Тестовая среда IaC | LocalStack | Отладка Terraform локально, без затрат на AWS |
 | CI/CD | GitHub Actions | `flake8` → сборка образа → сканирование Trivy → push в ghcr.io только из `main`; для PR — сборка и сканирование без публикации |
 | Безопасность | Trivy, Dependabot | Сканирование образа блокирует HIGH/CRITICAL уязвимости, для которых есть исправление; сторонние actions закреплены по SHA коммита; еженедельные PR от Dependabot для actions, pip и базового образа |
@@ -76,6 +77,7 @@ Job `terraform-plan` получает доступ к AWS без хранимы�
 - Trust policy проверяет `aud = sts.amazonaws.com` и `sub` только для `main` и pull request этого репозитория.
 - Роль только на чтение (`ReadOnlyAccess`) плюс запись только lock-файла state.
 - `aws-actions/configure-aws-credentials` и `hashicorp/setup-terraform` закреплены по SHA коммита.
+- Публичный SSH-ключ передаётся переменной `ssh_public_key`: локально — из `terraform.tfvars` (в `.gitignore`), в CI — из GitHub Variable `SSH_PUBLIC_KEY` (`TF_VAR_ssh_public_key`), поэтому plan в CI совпадает с локальным.
 
 ## Структура репозитория
 
@@ -89,6 +91,10 @@ Job `terraform-plan` получает доступ к AWS без хранимы�
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # инфраструктура AWS (+ инструкция для LocalStack)
 │   └── github-oidc/            # OIDC-провайдер + IAM-роль для GitHub Actions (отдельный state)
+├── ansible/                    # настройка сервера
+│   ├── ansible.cfg
+│   ├── site.yml                # плейбук
+│   └── roles/docker/           # Docker Engine + плагин Compose
 ├── docker-compose.ghcr-test.yml # запуск опубликованного образа из ghcr.io локально
 ├── monitoring/prometheus.yml   # конфиг сбора метрик Prometheus
 └── k8s/                        # манифесты Kubernetes (namespace → secret → postgres → app → ingress)
@@ -118,13 +124,29 @@ docker pull ghcr.io/madimuk/devops-todo-app:latest
 
 ```bash
 cd terraform
+# terraform.tfvars (в .gitignore):
+#   ssh_public_key = "ssh-ed25519 AAAA... aws-devops-todo"
 terraform init
 terraform plan
 terraform apply
-# outputs: instance_public_ip и ssh_command
-# приложение откроется на http://<instance_public_ip>:5000 через несколько минут после старта
-# после экспериментов — обязательно:
-terraform destroy
+terraform output instance_public_ip
+```
+
+### Настройка сервера (Ansible)
+
+```bash
+cd ansible
+# inventory.ini (в .gitignore):
+#   [app]
+#   <instance_public_ip>
+ansible all -m ping
+ansible-playbook site.yml   # повторный запуск должен дать changed=0 (идемпотентность)
+```
+
+После экспериментов — обязательно:
+
+```bash
+cd terraform && terraform destroy
 ```
 
 ### Kubernetes (minikube)
@@ -186,6 +208,14 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - *Причина:* у IAM-пользователя Terraform намеренно нет прав на IAM.
 - *Решение:* временная inline-политика, ограниченная OIDC-провайдером и `role/github-actions-*`, удалена сразу после `apply` (право менять роли — путь к повышению привилегий).
 
+**Terraform: plan в CI хочет пересоздать `aws_key_pair`, локально — без изменений**
+- *Причина:* `public_key` читался через `file()` с локального пути, а CI генерировал на раннере одноразовый ключ — входные данные различались.
+- *Решение:* передавать ключ переменной `ssh_public_key` — локально через `terraform.tfvars`, в CI через GitHub Variable `SSH_PUBLIC_KEY` → `TF_VAR_ssh_public_key`.
+
+**Ansible: плейбук проходит с `ok=1 changed=0`, задачи роли не выполняются**
+- *Причина:* файл задач лежал не в `roles/<role>/tasks/main.yml`; пустую роль Ansible ошибкой не считает.
+- *Решение:* положить задачи в `roles/docker/tasks/main.yml`; проверка — `ansible-playbook site.yml --list-tasks`.
+
 ## Контроль стоимости AWS
 
 - Инстанс `t2.micro`, без NAT Gateway и ALB.
@@ -202,7 +232,7 @@ echo "$(minikube ip) todo-app.local" | sudo tee -a /etc/hosts
 - [x] Kubernetes на minikube + NGINX Ingress
 - [x] Terraform remote state: S3 + нативная блокировка (`use_lockfile`)
 - [x] OIDC для GitHub Actions → AWS вместо постоянных ключей
-- [ ] Ansible: настройка EC2 и деплой приложения
+- [ ] Ansible: настройка EC2 и деплой приложения (роль `docker` готова, роль приложения — в работе)
 - [x] Trivy: сканирование образа в pipeline
 - [x] Dependabot: еженедельные обновления actions, pip и Docker
 - [ ] SSH только с моего IP, доступ через SSM Session Manager

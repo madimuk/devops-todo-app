@@ -123,7 +123,7 @@ resource "aws_security_group" "app" {
 # ---------------------------------------------------------------
 resource "aws_key_pair" "deployer" {
   key_name   = "${var.project_name}-key"
-  public_key = file(var.ssh_public_key_path)
+  public_key = var.ssh_public_key
 }
 
 # ---------------------------------------------------------------
@@ -135,64 +135,6 @@ resource "aws_instance" "app" {
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.app.id]
   key_name               = aws_key_pair.deployer.key_name
-
-  # Скрипт, который выполняется автоматически при первом запуске инстанса:
-  # ставит Docker, скачивает наш образ из GitHub Container Registry и запускает его
-  user_data = <<-EOF
-    #!/bin/bash
-    set -e
-
-    # Устанавливаем Docker
-    apt-get update -y
-    apt-get install -y docker.io docker-compose-v2
-    systemctl enable docker
-    systemctl start docker
-
-    # Создаём docker-compose.yml для запуска приложения + базы
-    mkdir -p /opt/todo-app
-    cat > /opt/todo-app/docker-compose.yml << 'COMPOSE'
-    services:
-      app:
-        image: ghcr.io/${var.github_username}/devops-todo-app:latest
-        container_name: todo-app
-        ports:
-          - "5000:5000"
-        environment:
-          DB_HOST: db
-          DB_PORT: 5432
-          DB_NAME: tododb
-          DB_USER: postgres
-          DB_PASSWORD: postgres
-        depends_on:
-          db:
-            condition: service_healthy
-        restart: unless-stopped
-
-      db:
-        image: postgres:16-alpine
-        container_name: todo-db
-        environment:
-          POSTGRES_DB: tododb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        volumes:
-          - pgdata:/var/lib/postgresql/data
-        healthcheck:
-          test: ["CMD-SHELL", "pg_isready -U postgres"]
-          interval: 5s
-          timeout: 5s
-          retries: 5
-        restart: unless-stopped
-
-    volumes:
-      pgdata:
-    COMPOSE
-
-    # Запускаем
-    cd /opt/todo-app
-    docker compose up -d
-  EOF
-
   tags = {
     Name = "${var.project_name}-instance"
   }

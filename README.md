@@ -19,13 +19,14 @@ flowchart LR
     subgraph AWS["AWS · eu-central-1 (provisioned by Terraform)"]
         direction TB
         subgraph VPC["VPC 10.0.0.0/16 · public subnet · IGW · Security Group"]
-            ec2[EC2 Ubuntu 24.04<br/>user_data: Docker + Compose]
+            ec2[EC2 Ubuntu 24.04<br/>Docker + Compose]
             ec2 --- app[Flask app :5000]
             app --- db[(PostgreSQL 16)]
         end
     end
 
     reg -->|docker pull| ec2
+    ans[Ansible<br/>site.yml] -->|SSH| ec2
     prom[Prometheus] -->|scrape /metrics| app
     graf[Grafana] --> prom
     user[User] -->|HTTP :5000| app
@@ -38,7 +39,7 @@ flowchart LR
 | Application | Python, Flask, PostgreSQL | Todo CRUD, configuration via environment variables, DB connection retry |
 | Containers | Docker, Docker Compose | Image based on `python:3.12-slim` with a cached dependency layer; DB healthcheck and `depends_on: service_healthy` |
 | IaC | Terraform | Remote state in S3 (versioning, encryption, native locking via `use_lockfile`); VPC, subnet, IGW, route table, Security Group, SSH key pair, EC2; Ubuntu AMI resolved via a `data` source instead of a hardcoded ID |
-| Deployment | EC2 `user_data` | On first boot the instance installs Docker, pulls the image from ghcr.io and starts the app with PostgreSQL — `terraform apply` gives a working app with no manual steps |
+| Configuration | Ansible | Terraform only provisions infrastructure; the server is configured by an idempotent playbook (`ansible/site.yml`). Role `docker`: Docker Engine + Compose plugin from the official repo, service enabled, `ubuntu` in the `docker` group. App deployment role — in progress |
 | IaC test environment | LocalStack | Terraform debugged locally at zero AWS cost |
 | CI/CD | GitHub Actions | `flake8` → image build → Trivy scan → push to ghcr.io from `main` only; pull requests are built and scanned but not published |
 | Security | Trivy, Dependabot | Image scan blocks HIGH/CRITICAL vulnerabilities with an available fix; third-party actions pinned by commit SHA; weekly Dependabot PRs for actions, pip and the base image |
@@ -76,6 +77,7 @@ The `terraform-plan` job gets AWS credentials without any stored secrets: GitHub
 - Trust policy checks `aud = sts.amazonaws.com` and `sub` for `main` and pull requests of this repository only.
 - The role is read-only (`ReadOnlyAccess`) plus write access to the state lock file only.
 - `aws-actions/configure-aws-credentials` and `hashicorp/setup-terraform` are pinned by commit SHA.
+- The SSH public key is passed as the `ssh_public_key` variable: locally from `terraform.tfvars` (git-ignored), in CI from the GitHub Variable `SSH_PUBLIC_KEY` (`TF_VAR_ssh_public_key`), so the plan in CI matches the local one.
 
 ## Repository layout
 
@@ -89,6 +91,10 @@ The `terraform-plan` job gets AWS credentials without any stored secrets: GitHub
 ├── .github/workflows/ci-cd.yml # CI/CD pipeline
 ├── terraform/                  # AWS infrastructure (+ LocalStack guide)
 │   └── github-oidc/            # OIDC provider + IAM role for GitHub Actions (separate state)
+├── ansible/                    # server configuration
+│   ├── ansible.cfg
+│   ├── site.yml                # playbook
+│   └── roles/docker/           # Docker Engine + Compose plugin
 ├── docker-compose.ghcr-test.yml # run the published image from ghcr.io locally
 ├── monitoring/prometheus.yml   # Prometheus scrape config
 └── k8s/                        # Kubernetes manifests (namespace → secret → postgres → app → ingress)
@@ -118,13 +124,29 @@ docker pull ghcr.io/madimuk/devops-todo-app:latest
 
 ```bash
 cd terraform
+# terraform.tfvars (git-ignored):
+#   ssh_public_key = "ssh-ed25519 AAAA... aws-devops-todo"
 terraform init
 terraform plan
 terraform apply
-# outputs: instance_public_ip and ssh_command
-# the app is available at http://<instance_public_ip>:5000 a few minutes after boot
-# always clean up after experiments:
-terraform destroy
+terraform output instance_public_ip
+```
+
+### Server configuration (Ansible)
+
+```bash
+cd ansible
+# inventory.ini (git-ignored):
+#   [app]
+#   <instance_public_ip>
+ansible all -m ping
+ansible-playbook site.yml   # second run must report changed=0 (idempotency)
+```
+
+Always clean up after experiments:
+
+```bash
+cd terraform && terraform destroy
 ```
 
 ### Kubernetes (minikube)
@@ -186,6 +208,14 @@ Real issues hit during the build and how they were fixed.
 - *Cause:* the Terraform IAM user intentionally has no IAM permissions.
 - *Fix:* a temporary inline policy scoped to the OIDC provider and `role/github-actions-*`, removed right after `apply` (IAM write access on roles is a privilege escalation path).
 
+**Terraform: plan in CI wants to replace `aws_key_pair`, local plan shows no changes**
+- *Cause:* `public_key` was read with `file()` from a local path; CI generated a throwaway key on the runner, so the inputs differed.
+- *Fix:* pass the key as the `ssh_public_key` variable — `terraform.tfvars` locally, GitHub Variable `SSH_PUBLIC_KEY` → `TF_VAR_ssh_public_key` in CI.
+
+**Ansible: playbook runs with `ok=1 changed=0`, role tasks are skipped**
+- *Cause:* the tasks file was not at `roles/<role>/tasks/main.yml`; Ansible does not treat an empty role as an error.
+- *Fix:* put tasks into `roles/docker/tasks/main.yml`; check with `ansible-playbook site.yml --list-tasks`.
+
 ## AWS cost control
 
 - `t2.micro` instance, no NAT Gateway or ALB.
@@ -202,7 +232,7 @@ Real issues hit during the build and how they were fixed.
 - [x] Kubernetes on minikube + NGINX Ingress
 - [x] Terraform remote state: S3 + native state locking (`use_lockfile`)
 - [x] OIDC for GitHub Actions → AWS instead of long-lived keys
-- [ ] Ansible: EC2 configuration and app deployment
+- [ ] Ansible: EC2 configuration and app deployment (`docker` role done, app role in progress)
 - [x] Trivy: image scanning in the pipeline
 - [x] Dependabot: weekly updates for actions, pip and Docker
 - [ ] SSH restricted to my IP, access via SSM Session Manager
