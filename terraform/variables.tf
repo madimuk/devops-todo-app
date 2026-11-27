@@ -28,18 +28,6 @@ variable "instance_type" {
   default     = "t2.micro"
 }
 
-variable "ssh_public_key_path" {
-  description = "Путь к публичному SSH-ключу для доступа к EC2"
-  type        = string
-  default     = "~/.ssh/aws-devops-todo.pub"
-}
-
-variable "github_username" {
-  description = "Имя пользователя GitHub (используется для пути образа в ghcr.io)"
-  type        = string
-  default     = "madimuk"
-}
-
 variable "ssh_public_key" {
   description = "Public SSH key for EC2 access"
   type        = string
